@@ -9,6 +9,7 @@ db("msgs.db", "", "", ""):
 
 #withDb:
   #createTables(force=false)
+
 proc threadCount(): int =
   withDb:
     result = Post.getMany(
@@ -22,12 +23,6 @@ proc postCount(): int =
       limit = 100
     ).len
 
-
-proc storeMsg(msg: JsonNode) =
-  var token = to(msg, Post)
-  withDb:
-    token.insert()
-
 proc lookupThread(op: int): seq[Post] =
   withDb:
     result = Post.getMany(
@@ -36,19 +31,34 @@ proc lookupThread(op: int): seq[Post] =
       limit = 100
     )
 
+proc storeMsg(msg: JsonNode) =
+  var token = to(msg, Post)
+  withDb:
+    token.insert()
+
+proc home(): string =
+  h1("Welcome to nChan! ", threadCount().intToStr, " threads, ",
+          postCount().intToStr, " posts")
+
 routes:
   get "/":
     withDb:
-      resp h1("Welcome to nChan! ", threadCount().intToStr, " threads, ", postCount().intToStr, " posts")
+      resp $home()
   get "/@thread":
     withDb:
-      var op = Post.getOne(parseInt @"thread")
-      if (op.parent == 0):
-        var posts = lookupThread(op.id)
-        var hi = op.name & ": " & op.message & '\n'
-        for i in posts:
-          hi.add(i.name & ": " & i.message & '\n')
-        resp $hi
+      try:
+        var op = Post.getOne(parseInt @"thread")
+        if (op.parent == 0):
+          var posts = lookupThread(op.id)
+          var hi = op.name & ": " & op.message & '\n'
+          for i in posts:
+            hi.add(i.name & ": " & i.message & '\n')
+          resp $hi
+      except:
+        discard
+    resp Http404, "Thread notg found!"
+
+
   post "/":
     var response = "invalid parent"
     let submission = parseJson request.body
