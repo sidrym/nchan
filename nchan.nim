@@ -1,7 +1,11 @@
-import jester, json, norm/sqlite, htmlgen
+import jester, json, norm/sqlite
+import karax / [karaxdsl, vdom]
 
 db("msgs.db", "", "", ""):
   type
+    # A post must either:
+    # - an opening post (have a parent of 0)
+    # - a reply to one (have a parent with a parent of 0)
     Post = object
       parent: int
       name: string
@@ -17,6 +21,13 @@ proc threadCount(): int =
       limit = 100
     ).len
 
+proc lookupOps(): seq[Post] =
+  withDb:
+    result = Post.getMany(
+      cond = "parent = 0",
+      limit = 100
+    )
+
 proc postCount(): int =
   withDb:
     result = Post.getMany(
@@ -25,58 +36,89 @@ proc postCount(): int =
 
 proc lookupThread(op: int): seq[Post] =
   withDb:
-    result = Post.getMany(
+    result.add Post.getOne op
+    result.add Post.getMany(
       cond = "parent = ?",
       params = op,
       limit = 100
     )
 
-proc storeMsg(msg: JsonNode) =
-  var token = to(msg, Post)
+proc storePost(parent: int, submission: Table[system.string, system.string]) =
+  var post = Post()
+  post.parent = parent
+  for field, val in submission.pairs:
+    case field:
+    of "message": post.message = val
+    of "name": post.name = val
+    else: echo "gay"
   withDb:
-    token.insert()
+    post.insert()
 
-proc home(): string =
-  h1("Welcome to nChan! ", threadCount().intToStr, " threads, ",
-          postCount().intToStr, " posts")
+# TODO: find a way to use this in renderHome and renderThread
+proc msgForm*(op: Post): string =
+  let vnode = buildHtml(tdiv(class = "form")):
+    form(`method` = "POST", action = "/" & op.id.intToStr):
+      input(`type` = "text", `placeholder` = "name", `name` = "name")
+      input(`type` = "text", `placeholder` = "message", `name` = "message")
+      button(`type` = "submit"): text "submit"
+  result = $vnode
+
+proc renderThread*(op: Post): string =
+  var posts = lookupThread(op.id)
+  let vnode = buildHtml(tdiv(class = "thread")):
+    p: text "Thread #" & op.id.intToStr
+    ul:
+      for i in posts:
+        li: text i.id.intToStr & ". " & i.name & ": " & i.message
+    # TODO: make this its own function, use enctype = "multipart/form-data"
+    form(`method` = "POST", action = "/" & op.id.intToStr):
+      input(`type` = "text", `placeholder` = "name", `name` = "name")
+      input(`type` = "text", `placeholder` = "message", `name` = "message")
+      button(`type` = "submit"): text "submit"
+  result = $vnode
+
+proc renderHome*(): string =
+  let vnode = buildHtml(tdiv(class = "home")):
+    h1: text "Welcome to nChan!"
+    h4: text threadCount().intToStr &
+        " threads, " & postCount().intToStr & " posts"
+    h4: text "Recent threads:"
+    ul:
+      for i in lookupOps():
+        li: a(href = i.id.intToStr): text i.message
+    # TODO: make this its own function, use enctype = "multipart/form-data"
+    form(`method` = "POST", action = "/0"):
+      input(`type` = "text", `placeholder` = "name", `name` = "name")
+      input(`type` = "text", `placeholder` = "message", `name` = "message")
+      button(`type` = "submit"): text "submit"
+  result = $vnode
+
 
 routes:
   get "/":
-    withDb:
-      resp $home()
+    resp renderHome()
   get "/@thread":
     withDb:
       try:
         var op = Post.getOne(parseInt @"thread")
         if (op.parent == 0):
-          var posts = lookupThread(op.id)
-          var hi = op.name & ": " & op.message & '\n'
-          for i in posts:
-            hi.add(i.name & ": " & i.message & '\n')
-          resp $hi
+          resp renderThread(op)
       except:
         discard
-    resp Http404, "Thread notg found!"
-
-
-  post "/":
+    resp Http404, "Thread not found!"
+  post "/@thread":
     var response = "invalid parent"
-    let submission = parseJson request.body
-    submission["id"] = %* 0 #placeholder id field
+    let submission = params(request)
+    let parent = parseInt @"thread"
     withDb:
-      let parent = submission["parent"].getInt
-
-      # A post must either:
-      # - an opening post (have a parent of 0)
-      # - a reply to one (have a parent with a parent of 0)
       if parent == 0:
-        storeMsg(submission)
+        storePost(parent, submission)
         response = "thread submitted!"
       else:
         try:
           let op = Post.getOne parent
           if op.parent == 0:
-            storeMsg(submission)
+            storePost(parent, submission)
             response = "reply submitted to thread!"
         except:
           discard
