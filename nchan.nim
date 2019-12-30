@@ -8,11 +8,12 @@ db("msgs.db", "", "", ""):
     # - a reply to one (have a parent with a parent of 0)
     Post = object
       parent: int
+      subject: string
       name: string
       message: string
 
-#withDb:
-  #createTables(force=false)
+withDb:
+  createTables(force=true)
 
 proc threadCount(): int =
   withDb:
@@ -36,7 +37,7 @@ proc postCount(): int =
 
 proc lookupThread(op: int): seq[Post] =
   withDb:
-    result.add Post.getOne op
+    #result.add Post.getOne op
     result.add Post.getMany(
       cond = "parent = ?",
       params = op,
@@ -48,28 +49,35 @@ proc storePost(parent: int, submission: Table[system.string, system.string]) =
   post.parent = parent
   for field, val in submission.pairs:
     case field:
-    of "message": post.message = val
-    of "name": post.name = val
-    else: echo "gay"
+    of "message": post.message = val.strip()
+    of "name": post.name = if val == "": "Anonymous" else: val.strip()
+    of "subject": post.subject = val.strip()
   withDb:
     post.insert()
 
-# TODO: find a way to use this in renderHome and renderThread
-proc msgForm*(op: Post): string =
-  let vnode = buildHtml(tdiv(class = "form")):
-    form(`method` = "POST", action = "/" & op.id.intToStr):
-      input(`type` = "text", `placeholder` = "name", `name` = "name")
-      input(`type` = "text", `placeholder` = "message", `name` = "message")
-      button(`type` = "submit"): text "submit"
-  result = $vnode
+## TODO: find a way to use this in renderHome and renderThread
+#proc msgForm*(op: Post): string =
+#  let vnode = buildHtml(tdiv(class = "form")):
+#    form(`method` = "POST", action = "/" & op.id.intToStr):
+#      input(`type` = "text", `placeholder` = "name", `name` = "name")
+#      input(`type` = "text", `placeholder` = "message", `name` = "message")
+#      button(`type` = "submit"): text "submit"
+#  result = $vnode
 
 proc renderThread*(op: Post): string =
   var posts = lookupThread(op.id)
   let vnode = buildHtml(tdiv(class = "thread")):
-    p: text "Thread #" & op.id.intToStr
+    text "Thread #" & op.id.intToStr & ": "
+    bold: text op.subject
+    p:
+      bold: text op.name
+      text ": " & op.message
     ul:
       for i in posts:
-        li: text i.id.intToStr & ". " & i.name & ": " & i.message
+        li:
+          text i.id.intToStr & ". "
+          bold: text i.name
+          text ": " & i.message
     # TODO: make this its own function, use enctype = "multipart/form-data"
     form(`method` = "POST", action = "/" & op.id.intToStr):
       input(`type` = "text", `placeholder` = "name", `name` = "name")
@@ -85,9 +93,15 @@ proc renderHome*(): string =
     h4: text "Recent threads:"
     ul:
       for i in lookupOps():
-        li: a(href = i.id.intToStr): text i.message
+        li: a(href = i.id.intToStr):
+          if i.subject == "":
+            text i.message
+          else:
+            bold: text i.subject
+            text ": " & i.message
     # TODO: make this its own function, use enctype = "multipart/form-data"
     form(`method` = "POST", action = "/0"):
+      input(`type` = "text", `placeholder` = "subject", `name` = "subject")
       input(`type` = "text", `placeholder` = "name", `name` = "name")
       input(`type` = "text", `placeholder` = "message", `name` = "message")
       button(`type` = "submit"): text "submit"
